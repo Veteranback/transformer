@@ -12,7 +12,14 @@ import numpy as np
 
 
 
-
+# Model parameters
+d_model = 512  # size of vectors throughout the transformer model
+n_heads = 8  # number of heads in the multi-head attention
+d_queries = 64  # size of query vectors (and also the size of the key vectors) in the multi-head attention
+d_values = 64  # size of value vectors in the multi-head attention
+d_inner = 2048  # an intermediate size in the position-wise FC
+n_layers = 6  # number of layers in the Encoder and Decoder
+dropout = 0.1  # dropout probability
 positional_encoding = get_positional_encoding(d_model=d_model,
                                               max_length=160)  # positional encodings up to the maximum possible pad-length
 
@@ -43,8 +50,8 @@ cudnn.benchmark = False  # since input tensor size is variable
 
 parser = argparse.ArgumentParser(description='test')
 parser.add_argument('--data',type=str,default='WMT14')
-parser.add_argument('--batch_size', type=int, default=32)
-parser.add_argument('--epochs', type=int, default=3)
+parser.add_argument('--batch_size', type=int, default=10)
+parser.add_argument('--epochs', type=int, default=5)
 parser.add_argument('--checkpoint', type=str, default=None)
 parser.add_argument('--device', type=str, default='cuda')
 args = parser.parse_args()
@@ -55,7 +62,7 @@ if not os.path.exists(model_prefix):
     os.mkdir(model_prefix)
 
 log_path=model_prefix+'log.txt'
-log_out=open(log_path,'a')
+log_out=open(log_path,'w')
 
 def get_lr_(optimizer):
     cur_lr=100
@@ -63,14 +70,6 @@ def get_lr_(optimizer):
         cur_lr=param_group['lr']
     return cur_lr
 
-# Model parameters
-d_model = 256  # size of vectors throughout the transformer model
-n_heads = 4  # number of heads in the multi-head attention
-d_queries = 32  # size of query vectors (and also the size of the key vectors) in the multi-head attention
-d_values = 32  # size of value vectors in the multi-head attention
-d_inner = 412  # an intermediate size in the position-wise FC
-n_layers = 4  # number of layers in the Encoder and Decoder
-dropout = 0.1  # dropout probability
 
 def main():
     """
@@ -79,11 +78,20 @@ def main():
     global checkpoint, step, start_epoch, epoch,args
 
     # Initialize data-loaders
-
+    # train_loader = SequenceLoader(data_folder="data",
+    #                               source_suffix="en",
+    #                               target_suffix="de",
+    #                               split="train",
+    #                               tokens_in_batch=tokens_in_batch)
     train_loader = PswLoader(data_folder=args.data,
                              training=1,
                              batch_size=args.batch_size,)
 
+    # val_loader = SequenceLoader(data_folder="data",
+    #                             source_suffix="en",
+    #                             target_suffix="de",
+    #                             split="train",
+    #                             tokens_in_batch=tokens_in_batch)
     val_loader = PswLoader(data_folder=args.data,
                              training=0,
                              batch_size=args.batch_size)
@@ -92,8 +100,8 @@ def main():
 
         model = Transformer(
             #vocab_size=train_loader.bpe_model.vocab_size(),
-            src_vocab_size=train_loader.src_vocab_size+1,
-            tgt_vocab_size=train_loader.tgt_vocab_size+1,
+            src_vocab_size=train_loader.src_vocab_size+1,#+1表示具有一个填充字符
+            tgt_vocab_size=train_loader.tgt_vocab_size+1,#+1表示具有一个填充字符
                             positional_encoding=positional_encoding,
                             d_model=d_model,
                             n_heads=n_heads,
@@ -116,6 +124,7 @@ def main():
         print('\nLoaded checkpoint from epoch %d.\n' % start_epoch)
         model = checkpoint['model']
         optimizer = checkpoint['optimizer']
+        #设置device
         model.encoder.device=args.device
         model.decoder.device = args.device
 
@@ -136,7 +145,7 @@ def main():
     for epoch in range(start_epoch, epochs):
         # Step
         print("-----cur epoch:%d----"%epoch)
-        step = epoch * train_loader.n_batches // batches_per_step
+        step = epoch * train_loader.n_batches // batches_per_step#当前进行的步骤数目
 
         # One epoch's training
         train_loader.create_batches()
@@ -152,8 +161,26 @@ def main():
         val_loader.create_batches()
         tmp_loss=validate(val_loader=val_loader,
                  model=model,
-                 criterion=criterion)
+                 criterion=criterion,epoch=epoch)
+        # if last_loss == 100 and cur_loss == 100:
+        #     last_loss = tmp_loss
+        # else:
+        #     if last_loss - tmp_loss <= 0.01:
+        #         out_last+=1
+        #         print("Epoch%d loss reduce:%.4f out_last:%d"%(epoch+1,last_loss-tmp_loss,out_last))
 
+        #     else:
+        #         out_last=0
+        #         print("Epoch%d loss reduce:%.4f" % (epoch + 1, last_loss - tmp_loss))
+        #         last_loss = tmp_loss
+        #     if out_last>=3:
+        #         print("done !!!")
+        #         break
+
+        # cyr_lr=get_lr_(optimizer)
+        # if cyr_lr<=2e-5:
+        #     print('training done cur lr:%.4f'%(cyr_lr))
+        #     break
     # Save checkpoint
     save_checkpoint(epoch, model, optimizer,prefix=model_prefix)
 
@@ -243,17 +270,17 @@ def train(train_loader, model, criterion, optimizer, epoch, epochs,step):
                                                                         step_time=step_time,
                                                                         data_time=data_time,
                                                                         losses=losses))
-                log_out.write('Epoch {0}/{1}-----'
-                        'Batch {2}/{3}-----'
-                        'Step {4}/{5}-----'
-                        'Data Time {data_time.val:.3f} ({data_time.avg:.3f})-----'
-                        'Step Time {step_time.val:.3f} ({step_time.avg:.3f})-----'
-                        'Loss {losses.val:.4f} ({losses.avg:.4f})\n\n'.format(epoch + 1, epochs,
-                                                                            i + 1, train_loader.n_batches,
-                                                                            step, n_steps,
-                                                                            step_time=step_time,
-                                                                            data_time=data_time,
-                                                                            losses=losses))
+                # log_out.write('Epoch {0}/{1}-----'
+                #         'Batch {2}/{3}-----'
+                #         'Step {4}/{5}-----'
+                #         'Data Time {data_time.val:.3f} ({data_time.avg:.3f})-----'
+                #         'Step Time {step_time.val:.3f} ({step_time.avg:.3f})-----'
+                #         'Loss {losses.val:.4f} ({losses.avg:.4f})\n\n'.format(epoch + 1, epochs,
+                #                                                             i + 1, train_loader.n_batches,
+                #                                                             step, n_steps,
+                #                                                             step_time=step_time,
+                #                                                             data_time=data_time,
+                #                                                             losses=losses))
             # Reset step time
             start_step_time = time.time()
             # Reset data time
@@ -262,7 +289,9 @@ def train(train_loader, model, criterion, optimizer, epoch, epochs,step):
 
 
 
-def validate(val_loader, model, criterion):
+
+
+def validate(val_loader, model, criterion,epoch):
     """
     One epoch's validation.
 
@@ -300,7 +329,7 @@ def validate(val_loader, model, criterion):
             # Keep track of losses
             losses.update(loss.item(), (target_sequence_length - 1).sum().item())
         cur_loss=losses.avg
-        log_out.write("\nValidation loss: %.3f\n\n" % losses.avg)
+        log_out.write("Epoch:%d Validation loss: %.3f\n\n" %(epoch,losses.avg) )
         print("\nValidation loss: %.3f\n\n" % losses.avg)
     return cur_loss
 if __name__ == '__main__':
